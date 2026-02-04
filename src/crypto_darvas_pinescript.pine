@@ -1,0 +1,131 @@
+//@version=6
+indicator("Crypto Box Re-entry: Alerts Only ($Spend/$Loss/$Profit)", overlay=true)
+
+// inputs
+upper = input.float(0.0, title="Upper \"Box\" Bound", step=0.01)
+lower = input.float(0.0, title="Lower \"Box\" Bound", step=0.01)
+
+spendUSD  = input.float(100, title="Position Amount ($)", step=1, minval=1)
+lossUSD   = input.float(50,  title="Max Loss (SL) ($)",          step=1, minval=1)
+profitUSD = input.float(200, title="Max profit (TP) ($)",       step=1, minval=1)
+
+stopBufferPct = input.float(0.02, title="Stop buffer (%)", step=0.01, minval=0.0) // buffer for a safety margin beyond sweep extremes
+cooldownBars  = input.int(0, title="Candles to wait before another alert", minval=0)
+
+
+// visual
+plot(upper, "Upper", linewidth=2)
+plot(lower, "Lower", linewidth=2)
+
+// constant for price adjusting with unit
+pv = syminfo.pointvalue
+
+f_qtyBySpend(entryPrice) =>
+    notionalPerQty = entryPrice * pv
+    notionalPerQty > 0 ? (spendUSD / notionalPerQty) : na
+
+f_qtyByRisk(entryPrice, stopPrice) =>
+    stopDist = math.abs(stopPrice - entryPrice)
+    lossPerQty = stopDist * pv
+    lossPerQty > 0 ? (lossUSD / lossPerQty) : na
+
+f_tpPrice(entryPrice, qty, isLong) =>
+    dollarsPerPriceMove = qty * pv
+    tpDist = dollarsPerPriceMove > 0 ? (profitUSD / dollarsPerPriceMove) : na
+    isLong ? (entryPrice + tpDist) : (entryPrice - tpDist)
+
+// pattern for when a close occurs outside of box, and then inside the box to follow the Darvas Strategy
+brokeAboveClose = close > upper
+brokeBelowClose = close < lower
+
+backInsideFromAbove = close <= upper
+backInsideFromBelow = close >= lower
+
+var bool armedShort = false
+var bool armedLong  = false
+var float sweepHigh = na
+var float sweepLow  = na
+
+// cooldown handling
+var int lastAlertBar = na
+canAlertNow = cooldownBars == 0 ? true : (na(lastAlertBar) or bar_index - lastAlertBar > cooldownBars)
+
+// arm and track sweep extremes while price is outside
+if brokeAboveClose
+    armedShort := true
+    sweepHigh := na(sweepHigh) ? high : math.max(sweepHigh, high)
+
+if brokeBelowClose
+    armedLong := true
+    sweepLow := na(sweepLow) ? low : math.min(sweepLow, low)
+
+// signals: close back inside
+shortSignal = armedShort and backInsideFromAbove
+longSignal  = armedLong  and backInsideFromBelow
+
+// construct alert message
+f_fmt(x) => str.tostring(x, format.mintick)
+
+if barstate.isconfirmed and canAlertNow and shortSignal and not na(sweepHigh)
+    entry = close
+    stop  = sweepHigh * (1 + stopBufferPct / 100.0)
+
+    qtySpend = f_qtyBySpend(entry)
+    qtyRisk  = f_qtyByRisk(entry, stop)
+    qty = math.min(qtySpend, qtyRisk)
+
+    // Only alert if sizing is valid
+    if not na(qty) and qty > 0
+        tp = f_tpPrice(entry, qty, false)
+
+        msg =
+          "BOX RE-ENTRY SIGNAL (SHORT)\n" +
+          "1) Place a SHORT market/limit near entry\n" +
+          "2) Set SL and TP as below\n\n" +
+          "Symbol: " + syminfo.ticker + "\n" +
+          "Entry (suggested): " + f_fmt(entry) + "\n" +
+          "Stop Loss: " + f_fmt(stop) + "  (max loss ≈ $" + str.tostring(lossUSD) + ")\n" +
+          "Take Profit: " + f_fmt(tp) + "  (target ≈ $" + str.tostring(profitUSD) + ")\n" +
+          "Qty: " + str.tostring(qty) + "\n\n" +
+          "Inputs: Spend $" + str.tostring(spendUSD) + " | Loss $" + str.tostring(lossUSD) + " | TP $" + str.tostring(profitUSD) + "\n" +
+          "Trigger: close back inside after close above upper."
+
+        alert(msg, alert.freq_once_per_bar_close)
+        lastAlertBar := bar_index
+
+    // reset state to help prevent multiple signals from the same event
+    armedShort := false
+    sweepHigh := na
+    armedLong := false
+    sweepLow := na
+
+if barstate.isconfirmed and canAlertNow and longSignal and not na(sweepLow)
+    entry = close
+    stop  = sweepLow * (1 - stopBufferPct / 100.0)
+
+    qtySpend = f_qtyBySpend(entry)
+    qtyRisk  = f_qtyByRisk(entry, stop)
+    qty = math.min(qtySpend, qtyRisk)
+
+    if not na(qty) and qty > 0
+        tp = f_tpPrice(entry, qty, true)
+
+        msg =
+          "BOX RE-ENTRY SIGNAL (LONG)\n" +
+          "1) Place a LONG market/limit near entry\n" +
+          "2) Set SL and TP as below\n\n" +
+          "Symbol: " + syminfo.ticker + "\n" +
+          "Entry (suggested): " + f_fmt(entry) + "\n" +
+          "Stop Loss: " + f_fmt(stop) + "  (max loss ≈ $" + str.tostring(lossUSD) + ")\n" +
+          "Take Profit: " + f_fmt(tp) + "  (target ≈ $" + str.tostring(profitUSD) + ")\n" +
+          "Qty: " + str.tostring(qty) + "\n\n" +
+          "Inputs: Spend $" + str.tostring(spendUSD) + " | Loss $" + str.tostring(lossUSD) + " | TP $" + str.tostring(profitUSD) + "\n" +
+          "Trigger: close back inside after close below lower."
+
+        alert(msg, alert.freq_once_per_bar_close)
+        lastAlertBar := bar_index
+
+    armedLong := false
+    sweepLow := na
+    armedShort := false
+    sweepHigh := na
