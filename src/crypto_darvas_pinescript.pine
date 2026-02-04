@@ -129,3 +129,10 @@ if barstate.isconfirmed and canAlertNow and longSignal and not na(sweepLow)
     sweepLow := na
     armedShort := false
     sweepHigh := na
+
+// indicators to help show script functionality on each candle
+plotshape(brokeBelowClose, title="Armed Long", style=shape.triangleup, location=location.belowbar, size=size.tiny)
+plotshape(longSignal, title="Long Signal", style=shape.circle, location=location.belowbar, size=size.tiny)
+
+plotshape(brokeAboveClose, title="Armed Short", style=shape.triangledown, location=location.abovebar, size=size.tiny)
+plotshape(shortSignal, title="Short Signal", style=shape.circle, location=location.abovebar, size=size.tiny)
